@@ -1,0 +1,10 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+.ipynb_checkpoints/
+# Keep the trained demo model in this small portfolio repository.
+# Raw training datasets are intentionally excluded.
+dataset/
+data/

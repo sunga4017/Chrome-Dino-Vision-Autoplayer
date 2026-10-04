@@ -1,120 +1,188 @@
 # Chrome Dino Vision Autoplayer
 
-A small end-to-end computer vision project that automatically plays the Chrome Dino game by combining a **PyTorch CNN**, **OpenCV-based obstacle localization**, and **rule-based jump control**.
+Chrome Dino 게임 화면을 실시간으로 인식하고, 장애물의 위치를 판단해 자동으로 점프하도록 만든 **Computer Vision 미니 프로젝트**입니다.
 
-This was an early Vision project built during a bootcamp before my larger robotics projects. The project is intentionally kept close to the original working implementation, with only repository structure, paths, documentation, and readability cleaned up for reproducibility.
+부트캠프 초기에 진행한 프로젝트로, **PyTorch CNN 기반 장애물 분류**, **OpenCV 기반 장애물 위치 검출**, **규칙 기반 점프 제어**를 하나의 실시간 파이프라인으로 연결했습니다.
 
-## Project Overview
+> 팀 단위로 시작한 미니 프로젝트였지만 실제 구현은 대부분 개인 작업으로 진행했습니다.  
+> **원본 게임 이미지 수집은 팀원이 담당했고, 데이터 정리·전처리 이후의 학습, 추론, 영상처리, 제어 로직은 제가 직접 구현했습니다.**
 
-The system captures the Chrome Dino game screen in real time, detects upcoming obstacles, estimates their horizontal position, and presses the space bar when a jump is required.
+---
+
+## 프로젝트 개요
+
+게임 화면을 지정된 영역에서 실시간 캡처한 뒤, 두 가지 Vision 결과를 함께 사용합니다.
 
 ```text
-Game screen capture (MSS)
+Chrome Dino 게임 화면 캡처
         ↓
-Grayscale / resize
+Grayscale / Resize
         ↓
-┌─────────────────────────────┐
-│ CNN obstacle classification │  → auxiliary diagnostic signal
-└─────────────────────────────┘
+┌──────────────────────────────┐
+│ CNN 장애물 존재 여부 분류      │
+└──────────────────────────────┘
         +
-┌─────────────────────────────┐
-│ OpenCV contour detection    │  → nearest obstacle x position
-└─────────────────────────────┘
+┌──────────────────────────────┐
+│ OpenCV 장애물 위치 검출         │
+│ - 낮/밤 화면 정규화            │
+│ - Contour 추출                │
+│ - 공룡 영역 및 노이즈 제거      │
+│ - 높은 익룡 필터링             │
+└──────────────────────────────┘
         ↓
-Dynamic jump threshold
+가장 가까운 장애물의 x 좌표
         ↓
-Jump decision
+시간 기반 Dynamic Threshold
         ↓
-Keyboard input (Space)
+점프 여부 판단
+        ↓
+Space 입력
 ```
 
-## My Role
+CNN은 **장애물이 있는지 여부를 분류하는 보조 인식 모델**로 사용하고, 실제 점프 시점은 **OpenCV로 구한 장애물 위치 + 동적 임계값**을 기준으로 결정합니다.
 
-This was a small team activity that effectively became an individual implementation.
+---
 
-- **Dataset image collection:** teammate
-- **Dataset organization / preprocessing:** me
-- **CNN architecture and training pipeline:** me
-- **Model evaluation and inference integration:** me
-- **OpenCV obstacle localization and filtering:** me
-- **Dynamic jump logic and game-control integration:** me
-- **Real-time visualization / debugging UI:** me
+## 담당 역할 및 주요 기여
 
-## Key Implementation Details
+- 수집된 이미지 데이터를 학습용 구조로 정리하고 grayscale 변환 및 `256 × 64` resize 전처리를 구성했습니다.
+- PyTorch로 2-layer CNN 기반 장애물 이진 분류 모델을 직접 구현하고 학습·평가 파이프라인을 작성했습니다.
+- 학습된 CNN 모델을 실시간 게임 화면 추론 코드에 연결했습니다.
+- OpenCV thresholding과 contour detection을 이용해 가장 가까운 장애물의 위치를 검출하는 로직을 구현했습니다.
+- 공룡 본체 영역, 작은 노이즈, 점프할 필요가 없는 높은 익룡을 제외하도록 규칙 기반 필터를 추가했습니다.
+- 게임 진행에 따라 속도가 증가하는 문제를 보완하기 위해 시간에 따라 점프 기준 거리를 증가시키는 Dynamic Threshold 로직을 구현했습니다.
+- 장애물 위치, 점프 기준선, CNN 판별 결과를 실시간으로 확인할 수 있는 디버깅 화면을 구성했습니다.
 
-### 1. CNN obstacle classifier
+---
 
-A small binary CNN was implemented directly in PyTorch rather than using a pretrained detector.
+## 핵심 구현
 
-- Input: grayscale `256 × 64`
-- Conv2d `1 → 32` + ReLU + MaxPool
-- Conv2d `32 → 64` + ReLU + MaxPool
-- Fully connected binary output + Sigmoid
-- Loss: `BCELoss`
-- Optimizer: `Adam`
-- Training epochs: `20`
+### 1. PyTorch CNN 장애물 분류
 
-The recorded training run used **1,950 training images** and evaluated on **250 test images**, producing **99.60% test accuracy on that test set**.
+사전학습 객체탐지 모델을 사용하지 않고, 작은 CNN을 직접 구성했습니다.
 
-> This number only describes the provided test split and should not be interpreted as general performance across arbitrary screen sizes, themes, or game conditions.
+```text
+Input: 1 × 64 × 256
+        ↓
+Conv2d (1 → 32) + ReLU + MaxPool
+        ↓
+Conv2d (32 → 64) + ReLU + MaxPool
+        ↓
+Fully Connected
+        ↓
+Sigmoid
+        ↓
+Obstacle / Clear
+```
 
-### 2. OpenCV obstacle localization
+학습 설정:
 
-The CNN predicts whether an obstacle is present, but the controller also needs to know **where the nearest obstacle is** to decide when to jump.
+| 항목 | 설정 |
+|---|---|
+| Framework | PyTorch |
+| Input | Grayscale 256 × 64 |
+| Loss | BCELoss |
+| Optimizer | Adam |
+| Epoch | 20 |
+| Train images | 1,950 |
+| Test images | 250 |
 
-For that reason, the final real-time control path uses OpenCV to:
+기록된 테스트 결과는 **99.60% accuracy**였습니다.
 
-- normalize day/night screen colors with binary thresholding,
-- extract external contours,
-- ignore the player dinosaur region,
-- remove tiny noise contours,
-- ignore high-flying obstacles that should not trigger a jump,
-- return the x position of the nearest valid obstacle.
+> 이 수치는 당시 구성한 250장의 test split에 대한 결과이며, 다른 해상도·브라우저 배율·화면 환경에서도 동일한 성능을 보장한다는 의미는 아닙니다.
 
-### 3. Dynamic jump threshold
+---
 
-The Chrome Dino game becomes faster over time. A fixed jump distance therefore became less reliable as gameplay continued.
+### 2. OpenCV 장애물 위치 검출
 
-The controller increases the jump threshold over elapsed game time:
+CNN의 출력은 장애물이 **있는지 없는지**는 알려주지만, 자동 점프를 위해서는 장애물이 **얼마나 가까이 있는지**가 필요했습니다.
+
+따라서 실제 제어에는 OpenCV를 추가해 장애물의 x 좌표를 계산했습니다.
+
+주요 처리 과정:
+
+1. 게임 화면을 grayscale로 변환
+2. 좌측 상단 픽셀 밝기를 이용해 낮/밤 화면 판단
+3. 낮/밤 상태에 맞게 binary threshold 방향을 변경
+4. `findContours()`로 객체 후보 추출
+5. 공룡이 위치한 좌측 영역 제외
+6. 작은 노이즈 contour 제거
+7. 점프할 필요가 없는 높은 익룡 제외
+8. 가장 가까운 장애물의 x 좌표 반환
+
+즉, 모델 하나에 모든 판단을 맡기기보다 **CNN 분류 + OpenCV 위치 검출 + 규칙 기반 제어**를 조합했습니다.
+
+---
+
+### 3. Dynamic Jump Threshold
+
+Chrome Dino 게임은 시간이 지날수록 속도가 빨라집니다.
+
+고정된 거리에서만 점프하도록 하면 후반부에 반응 시점이 늦어질 수 있어, 게임 진행 시간에 따라 점프 기준 거리를 증가시키도록 구현했습니다.
 
 ```python
 jump_threshold = 70 + elapsed_time * 0.5
 jump_threshold = min(jump_threshold, 230)
 ```
 
-This is a simple rule-based adaptation rather than a learned policy.
+이 로직은 학습 기반 정책이 아니라, 실제 플레이 중 발견한 속도 변화 문제를 보완하기 위한 **rule-based adaptation**입니다.
 
-### 4. Real-time debugging view
+---
 
-The `AI Eye` window visualizes the controller's current decision state:
+### 4. 실시간 디버깅 화면
 
-- **Blue line:** current jump threshold
-- **Green line:** height filter for ignored obstacles
-- **Red line:** nearest detected obstacle
-- **CNN status:** obstacle / clear diagnostic result
+`AI Eye` 창에서 현재 판단 상태를 확인할 수 있도록 시각화했습니다.
 
-The visualization was used to tune the obstacle filters and jump timing during development.
+- **파란선**: 현재 점프 임계거리
+- **초록선**: 높은 장애물 제외 기준
+- **빨간선**: 가장 가까운 검출 장애물
+- **CNN 상태**: `OBSTACLE` / `CLEAR`
 
-## Important Design Note
+실시간으로 결과를 보면서 장애물 필터와 점프 시점을 조정하는 데 사용했습니다.
 
-The final jump decision is based on the **OpenCV-derived obstacle position + dynamic threshold**, not directly on the CNN binary output.
+---
 
-The CNN remains integrated as an auxiliary obstacle-presence classifier. During development, I found that binary presence classification alone was insufficient for control because the player needs positional information to determine **when** to jump.
+## 설계상 중요한 점
 
-This distinction is preserved in the repository instead of presenting the project as a fully CNN-driven controller.
+최종 점프 여부는 **CNN 출력만으로 결정하지 않습니다.**
 
-## Game State Handling
+CNN은 장애물 존재 여부를 분류할 수 있지만, 실제 게임 제어에서는 단순한 존재 여부보다 **장애물이 현재 어디에 있는지**가 더 중요했습니다.
 
-The runtime compares consecutive frames to detect long periods with almost no visual change. This is used to identify a waiting/game-over state and reset the speed timer when movement resumes.
+그래서 최종 제어 구조는 다음과 같습니다.
 
-**Automatic game restart is not implemented.** The code detects that gameplay has resumed; it does not press the restart key by itself.
+```text
+CNN
+└─ 장애물 존재 여부 확인용 보조 신호
 
-## Repository Structure
+OpenCV
+└─ 가장 가까운 장애물의 위치 계산
+        ↓
+Dynamic Threshold와 비교
+        ↓
+점프 여부 결정
+```
+
+즉, CNN을 학습하고 실제 추론 파이프라인에 연결했지만, 최종 행동 판단은 **OpenCV 기반 위치 정보와 규칙 기반 로직**을 중심으로 구성했습니다.
+
+---
+
+## 게임 상태 감지
+
+연속 프레임 간 차이가 거의 없는 상태가 일정 시간 지속되면 게임이 정지된 상태로 판단합니다.
+
+이후 화면 움직임이 다시 감지되면 게임이 재개된 것으로 판단하고 속도 계산용 타이머를 초기화합니다.
+
+> 현재 코드는 **게임 재개 상태를 감지**하지만, 게임 오버 후 자동으로 재시작 키를 입력하는 기능은 구현되어 있지 않습니다.
+
+---
+
+## 디렉터리 구조
 
 ```text
 Chrome-Dino-Vision-Autoplayer/
 ├── README.md
 ├── requirements.txt
+├── .gitignore
 ├── models/
 │   └── dino_cnn_model.pth
 ├── notebooks/
@@ -124,48 +192,58 @@ Chrome-Dino-Vision-Autoplayer/
     └── main.py
 ```
 
-## Setup
+---
+
+## 실행 방법
+
+### 1. 가상환경 생성
 
 ```bash
 python -m venv .venv
 ```
 
-Activate the virtual environment, then install dependencies:
+가상환경을 활성화한 뒤 필요한 패키지를 설치합니다.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Run
+### 2. 실행
 
-1. Open the Chrome Dino game.
-2. Run:
+Chrome Dino 게임을 연 뒤 다음 명령을 실행합니다.
 
 ```bash
 python src/main.py
 ```
 
-3. Drag over the Dino game area in the ROI selection window and press `Enter`.
-4. The program clicks the selected area and starts the game with `Space`.
-5. Press `q` to stop.
+실행 후:
 
-> Screen geometry and threshold values were tuned for the original development environment, so retuning may be necessary on a different display or browser scale.
+1. ROI 선택 창에서 Dino 게임 영역을 드래그합니다.
+2. `Enter`를 눌러 영역을 확정합니다.
+3. 프로그램이 선택 영역을 클릭하고 Space를 입력해 게임을 시작합니다.
+4. 실행 중 `q`를 누르면 종료됩니다.
 
-## Limitations
+> 화면 크기와 threshold 값은 당시 개발 환경을 기준으로 조정되어 있어, 다른 해상도나 브라우저 배율에서는 재조정이 필요할 수 있습니다.
 
-This is an early learning project, and several limitations are intentionally documented rather than hidden:
+---
 
-- obstacle rules contain manually tuned pixel thresholds,
-- the controller is specific to the Chrome Dino visual layout,
-- the CNN test set is small and does not establish broad generalization,
-- CNN classification is not used as the final jump gate,
-- game-over is detected, but automatic restart is not implemented,
-- the original dataset images are not included in this repository.
+## 한계 및 개선 가능성
 
-## What I Learned
+이 프로젝트는 본격적인 Vision·Robotics 프로젝트를 진행하기 전의 초기 학습 프로젝트이므로 다음과 같은 한계가 있습니다.
 
-This project was my first complete experience of connecting a vision model to an action loop:
+- 장애물 필터와 점프 임계값 일부가 픽셀 단위로 수동 조정되어 있습니다.
+- Chrome Dino의 특정 화면 구조에 의존합니다.
+- 테스트 데이터 규모가 작아 일반화 성능을 충분히 검증하지 못했습니다.
+- CNN 결과가 최종 점프 gate로 직접 사용되지는 않습니다.
+- 게임 오버 상태는 감지하지만 자동 재시작 기능은 구현하지 않았습니다.
+- 원본 학습 데이터셋은 저장소에 포함하지 않았습니다.
 
-**data → training → inference → image processing → decision logic → real-time action**.
+---
 
-Later robotics projects expanded the same perception-to-action idea using ROS 2, YOLO-based detection, robot manipulation, and NVIDIA Isaac Sim.
+## 프로젝트를 통해 경험한 것
+
+이 프로젝트를 통해 처음으로 다음 전체 흐름을 직접 연결해봤습니다.
+
+**데이터 전처리 → CNN 학습 → 모델 저장 → 실시간 추론 → 영상처리 → 판단 로직 → 실제 입력 제어**
+
+이후 프로젝트에서는 이 경험을 확장해 ROS 2, YOLO 기반 객체 탐지, 협동로봇 Pick-and-Place, NVIDIA Isaac Sim 기반 Vision·Robotics 시스템을 구현했습니다.
